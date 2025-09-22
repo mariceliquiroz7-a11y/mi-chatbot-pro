@@ -1,107 +1,127 @@
 import os
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
-from llama_index.vector_stores.chroma import ChromaVectorStore
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.readers.web import SimpleWebPageReader
-import chromadb
+import requests
+import json
 from pathlib import Path
+from dotenv import load_dotenv
+from pinecone import Pinecone
+from llama_index.readers.web import SimpleWebPageReader
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
+
+# Cargar variables de entorno
+load_dotenv()
+
+# --- Configuración de Pinecone y Cohere ---
+PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
+PINECONE_ENVIRONMENT = os.environ.get("PINECONE_ENVIRONMENT")
+COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
+
+# --- Funciones de RAG y Búsqueda Web ---
+def create_embeddings_cohere(texts):
+    """Crea embeddings para el texto usando la API de Cohere."""
+    if not COHERE_API_KEY:
+        print("Error: COHERE_API_KEY no está configurada.")
+        return None
+        
+    try:
+        headers = {
+            "Authorization": f"Bearer {COHERE_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        json_data = {
+            "texts": texts,
+            "model": "embed-multilingual-v3.0",
+            "input_type": "search_document"
+        }
+        
+        response = requests.post(
+            "https://api.cohere.ai/v1/embed",
+            headers=headers,
+            json=json_data
+        )
+        response.raise_for_status()
+        return response.json()["embeddings"]
+    except requests.exceptions.RequestException as e:
+        print(f"Error al crear embeddings con Cohere: {e}")
+        return None
 
 def main():
-    print("🚀 Iniciando indexación híbrida para comercio internacional...")
+    print("🚀 Iniciando indexación para Pinecone...")
     
-    try:
-        # 1. Configurar modelo de embeddings local (GRATIS, SIN LÍMITES)
-        print("📦 Configurando embeddings locales...")
-        embed_model = HuggingFaceEmbedding(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            cache_folder="./embedding_cache"
-        )
-        Settings.embed_model = embed_model
-        print("✅ Modelo de embeddings configurado (local, sin límites)")
-        
-        # 2. Cargar documentos PDF
-        docs_path = Path("./docs")
-        if not docs_path.exists():
-            docs_path.mkdir()
-        
+    # 1. Cargar documentos PDF y URLs
+    docs_path = Path("./docs")
+    documents = []
+    
+    if docs_path.exists():
         pdf_files = list(docs_path.glob("*.pdf"))
-        documents = []
-        
         if pdf_files:
             print(f"📄 Procesando {len(pdf_files)} archivos PDF...")
             pdf_documents = SimpleDirectoryReader(input_dir="./docs").load_data()
             documents.extend(pdf_documents)
             print(f"✅ PDFs cargados: {len(pdf_documents)} documentos")
         
-        # 3. URLs de comercio internacional y web scraping
-        print("🌐 Cargando recursos web de comercio internacional...")
-        urls = [
-            # Comercio Internacional Oficial
-            "https://es.wikipedia.org/wiki/Comercio_internacional",
-            "https://es.wikipedia.org/wiki/Organizaci%C3%B3n_Mundial_del_Comercio",
-            "https://es.wikipedia.org/wiki/Arancel",
-            "https://es.wikipedia.org/wiki/Incoterms",
-            
-            # Web Scraping
-            "https://es.wikipedia.org/wiki/Web_scraping",
-            "https://es.wikipedia.org/wiki/Extracci%C3%B3n_de_datos",
-            
-            # Logística y Aduanas
-            "https://es.wikipedia.org/wiki/Log%C3%ADstica",
-            "https://es.wikipedia.org/wiki/Aduana"
-        ]
-        
-        try:
-            web_reader = SimpleWebPageReader(html_to_text=True)
-            url_documents = web_reader.load_data(urls)
-            documents.extend(url_documents)
-            print(f"✅ Páginas web cargadas: {len(url_documents)} recursos")
-        except Exception as e:
-            print(f"⚠️ Error con algunas URLs: {e}")
-            print("Continuando con documentos disponibles...")
-        
-        if not documents:
-            print("❌ No se encontraron documentos para indexar")
-            return
-        
-        print(f"📚 Total de documentos: {len(documents)}")
-        
-        # 4. Configurar base de datos vectorial
-        print("🔧 Configurando ChromaDB...")
-        db = chromadb.PersistentClient(path="./chroma_db")
-        
-        try:
-            db.delete_collection("comercio_internacional_hybrid")
-        except:
-            pass
-        
-        chroma_collection = db.create_collection("comercio_internacional_hybrid")
-        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-        
-        # 5. Crear índice vectorial
-        print("🧠 Creando índice vectorial híbrido...")
-        print("⏱️ Primera ejecución: descarga modelo (~90MB)")
-        
-        index = VectorStoreIndex.from_documents(
-            documents,
-            vector_store=vector_store,
-            show_progress=True
-        )
-        
-        print("\n🎉 ¡Indexación completada!")
-        print("📊 Resumen:")
-        print(f"   - Documentos procesados: {len(documents)}")
-        print(f"   - Embeddings: all-MiniLM-L6-v2 (local)")
-        print(f"   - Base de datos: ./chroma_db")
-        print(f"   - Colección: comercio_internacional_hybrid")
-        print("\n🚀 Listo para el sistema híbrido de respuestas!")
-        
+    print("🌐 Cargando recursos web...")
+    urls = [
+        "https://es.wikipedia.org/wiki/Comercio_internacional",
+        "https://es.wikipedia.org/wiki/Organizaci%C3%B3n_Mundial_del_Comercio",
+        "https://es.wikipedia.org/wiki/Arancel",
+        "https://es.wikipedia.org/wiki/Incoterms",
+    ]
+    try:
+        web_reader = SimpleWebPageReader(html_to_text=True)
+        url_documents = web_reader.load_data(urls)
+        documents.extend(url_documents)
+        print(f"✅ Páginas web cargadas: {len(url_documents)} recursos")
     except Exception as e:
-        print(f"❌ Error: {e}")
-        print("💡 Posibles causas:")
-        print("  - Conexión a internet (descarga del modelo)")
-        print("  - Espacio en disco insuficiente")
-        print("  - PDFs corruptos")
+        print(f"⚠️ Error al cargar URLs: {e}")
+
+    if not documents:
+        print("❌ No se encontraron documentos para indexar.")
+        return
+        
+    print(f"📚 Total de documentos: {len(documents)}")
+
+    # 2. Conectar a Pinecone
+    try:
+        if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
+            print("❌ Falta una clave API o entorno de Pinecone.")
+            return
+            
+        pc = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+        index_name = "chatbot-comercio"
+        
+        if index_name not in pc.list_indexes().names:
+            print("🔧 Creando índice en Pinecone...")
+            pc.create_index(
+                name=index_name,
+                dimension=1024,  # La dimensión del modelo Cohere
+                metric="cosine",
+            )
+        else:
+            print(f"✅ Conectado al índice existente: '{index_name}'")
+
+        pinecone_index = pc.Index(index_name)
+
+    except Exception as e:
+        print(f"❌ Error al conectar con Pinecone: {e}")
+        return
+
+    # 3. Crear embeddings e indexar
+    print("🧠 Creando embeddings e indexando documentos...")
+    nodes = []
+    for doc in documents:
+        text = doc.get_content()
+        embedding = create_embeddings_cohere([text])
+        if embedding:
+            node = {"id": doc.doc_id, "values": embedding[0], "metadata": {"text": text}}
+            nodes.append(node)
+
+    if nodes:
+        pinecone_index.upsert(vectors=nodes)
+        print("🎉 ¡Indexación completada!")
+        print(f"📊 Documentos procesados: {len(documents)}")
+        print("🚀 Tu índice de Pinecone está listo para el chatbot.")
+    else:
+        print("⚠️ No se pudieron crear los embeddings. Indexación fallida.")
 
 if __name__ == "__main__":
     main()
