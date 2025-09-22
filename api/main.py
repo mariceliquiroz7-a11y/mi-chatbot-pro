@@ -1,30 +1,17 @@
 import os
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+from flask import Flask, request, jsonify
 from pinecone import Pinecone
 from groq import Groq
 
-# --- Configuración de la API con FastAPI ---
-app = FastAPI(title="Chatbot de Comercio Internacional")
-
-# Permitir CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# --- Configuración de la aplicación con Flask ---
+app = Flask(__name__)
 
 # --- Configuración de Pinecone y Groq ---
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
-PINECONE_ENVIRONMENT = os.environ.get("PINECONE_ENVIRONMENT")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# Inicialización con validación
 try:
-    if PINECONE_API_KEY and PINECONE_ENVIRONMENT:
+    if PINECONE_API_KEY:
         pc = Pinecone(api_key=PINECONE_API_KEY)
         pinecone_index = pc.Index("chatbot-comercio")
         print("✅ Pinecone inicializado correctamente")
@@ -54,7 +41,7 @@ def retrieve_from_pinecone(user_message: str):
         # En una aplicación real, usarías un modelo de embeddings aquí.
         # Por ahora, usamos un vector dummy.
         query_results = pinecone_index.query(
-            vector=[0.0] * 1024, # Dimensión del modelo de Cohere
+            vector=[0.0] * 1024,
             top_k=3,
             include_metadata=True
         )
@@ -88,35 +75,29 @@ def generate_response(prompt: str):
         print(f"Error al generar respuesta con Groq: {e}")
         return "Lo siento, ha ocurrido un error al generar la respuesta."
 
-# --- Endpoint de la API ---
-@app.get("/")
+# --- Endpoints de la API ---
+@app.route("/", methods=["GET"])
 def home():
-    """Endpoint principal para verificar que la API está funcionando."""
-    return {
+    return jsonify({
         "message": "¡API del Chatbot de Comercio Internacional en funcionamiento!",
         "status": "running",
         "services": {
             "pinecone": "✅" if pinecone_index else "❌",
             "groq": "✅" if groq_client else "❌"
         }
-    }
+    })
 
-@app.post("/api/chat")
-async def chat_endpoint(request: Request):
-    """
-    Endpoint con la estrategia RAG para el chatbot.
-    """
+@app.route("/api/chat", methods=["POST"])
+def chat_endpoint():
     try:
-        data = await request.json()
+        data = request.json
         user_message = data.get("message", "").strip()
 
         if not user_message:
-            return JSONResponse(status_code=400, content={"error": "Mensaje de usuario no proporcionado."})
+            return jsonify({"error": "Mensaje de usuario no proporcionado."}), 400
 
-        # Paso 1: Recuperar contexto de Pinecone
         rag_context = retrieve_from_pinecone(user_message)
         
-        # Paso 2: Crear un prompt con el contexto y la pregunta
         prompt_template = f"""
         Eres un experto en comercio internacional. 
         Utiliza el siguiente contexto para responder a las preguntas de los usuarios. 
@@ -127,14 +108,13 @@ async def chat_endpoint(request: Request):
         Pregunta: {user_message}
         """
 
-        # Paso 3: Invocar la cadena para obtener la respuesta
         response = generate_response(prompt_template)
 
-        return {"response": response}
+        return jsonify({"response": response})
         
     except Exception as e:
         print(f"❌ Error general: {e}")
-        return JSONResponse(status_code=500, content={"error": f"Error interno: {str(e)}"})
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 # Para Vercel, necesitamos exportar la app
 handler = app
