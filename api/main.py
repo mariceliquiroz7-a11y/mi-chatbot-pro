@@ -38,8 +38,6 @@ def retrieve_from_pinecone(user_message: str):
         return ""
     
     try:
-        # En una aplicación real, usarías un modelo de embeddings aquí.
-        # Por ahora, usamos un vector dummy.
         query_results = pinecone_index.query(
             vector=[0.0] * 1024,
             top_k=3,
