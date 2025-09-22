@@ -5,11 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pinecone import Pinecone
-from langchain_groq import ChatGroq
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
+from groq import Groq
 
 # --- Configuración de la API con FastAPI ---
 app = FastAPI(title="Chatbot de Comercio Internacional")
@@ -39,16 +35,16 @@ try:
         print("⚠️ Pinecone no disponible - falta API key")
         
     if GROQ_API_KEY:
-        groq_llm = ChatGroq(temperature=0.7, groq_api_key=GROQ_API_KEY, model_name="mixtral-8x7b-32768")
+        groq_client = Groq(api_key=GROQ_API_KEY)
         print("✅ Groq inicializado correctamente")
     else:
-        groq_llm = None
+        groq_client = None
         print("⚠️ Groq no disponible - falta API key")
         
 except Exception as e:
     print(f"❌ Error inicializando servicios: {e}")
     pinecone_index = None
-    groq_llm = None
+    groq_client = None
 
 # --- Funciones de RAG ---
 def retrieve_from_pinecone(user_message: str):
@@ -57,8 +53,10 @@ def retrieve_from_pinecone(user_message: str):
         return ""
     
     try:
+        # En una aplicación real, usarías un modelo de embeddings aquí.
+        # Por ahora, usamos un vector dummy.
         query_results = pinecone_index.query(
-            vector=[0.0] * 1536,  # Vector dummy, as we're not creating embeddings
+            vector=[0.0] * 1024, # Dimensión del modelo de Cohere
             top_k=3,
             include_metadata=True
         )
@@ -71,6 +69,27 @@ def retrieve_from_pinecone(user_message: str):
         print(f"Error al buscar en Pinecone: {e}")
         return ""
 
+def generate_response(prompt: str):
+    """Genera una respuesta usando la API de Groq."""
+    if not groq_client:
+        return "Lo siento, el servicio de IA no está disponible."
+    
+    try:
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            model="mixtral-8x7b-32768",
+            temperature=0.7,
+        )
+        return chat_completion.choices[0].message.content
+    except Exception as e:
+        print(f"Error al generar respuesta con Groq: {e}")
+        return "Lo siento, ha ocurrido un error al generar la respuesta."
+
 # --- Endpoint de la API ---
 @app.get("/")
 def home():
@@ -80,7 +99,7 @@ def home():
         "status": "running",
         "services": {
             "pinecone": "✅" if pinecone_index else "❌",
-            "groq": "✅" if groq_llm else "❌"
+            "groq": "✅" if groq_client else "❌"
         }
     }
 
@@ -99,28 +118,19 @@ async def chat_endpoint(request: Request):
         # Paso 1: Recuperar contexto de Pinecone
         rag_context = retrieve_from_pinecone(user_message)
         
-        # Paso 2: Crear un prompt con el contexto
-        template = """
+        # Paso 2: Crear un prompt con el contexto y la pregunta
+        prompt_template = f"""
         Eres un experto en comercio internacional. 
         Utiliza el siguiente contexto para responder a las preguntas de los usuarios. 
         Si no encuentras información relevante en el contexto, simplemente responde que no puedes ayudar con esa pregunta específica.
 
-        Contexto: {context}
+        Contexto: {rag_context}
 
-        Pregunta: {question}
+        Pregunta: {user_message}
         """
-        prompt = PromptTemplate(template=template, input_variables=["context", "question"])
 
-        # Paso 3: Crear la cadena de procesamiento
-        chain = (
-            {"context": RunnablePassthrough(), "question": RunnablePassthrough()}
-            | prompt
-            | groq_llm
-            | StrOutputParser()
-        )
-
-        # Paso 4: Invocar la cadena para obtener la respuesta
-        response = chain.invoke({"context": rag_context, "question": user_message})
+        # Paso 3: Invocar la cadena para obtener la respuesta
+        response = generate_response(prompt_template)
 
         return {"response": response}
         
