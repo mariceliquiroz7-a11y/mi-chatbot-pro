@@ -25,7 +25,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 # Inicialización con validación
 try:
     if PINECONE_API_KEY and PINECONE_ENVIRONMENT:
-        pc = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+        pc = Pinecone(api_key=PINECONE_API_KEY)
         pinecone_index = pc.Index("chatbot-comercio")
         print("✅ Pinecone inicializado correctamente")
     else:
