@@ -1,4 +1,3 @@
-   git rm -r --cached venv/
-   git rm -r --cached chroma_db/
-   git rm -r --cached __pycache__/
-   git commit -m "Remove unnecessary files"
+.env
+embedding_cache/
+chroma/
